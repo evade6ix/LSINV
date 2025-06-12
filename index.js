@@ -1,9 +1,20 @@
 import express from "express"
 import axios from "axios"
 import dotenv from "dotenv"
+import { MongoClient } from "mongodb"
 dotenv.config()
 
 const app = express()
+
+// Helper to connect to MongoDB
+let mongoClient
+async function getDb() {
+  if (!mongoClient) {
+    mongoClient = new MongoClient(process.env.MONGO_URI)
+    await mongoClient.connect()
+  }
+  return mongoClient.db("lightspeed")
+}
 
 // Root route: shows login link with properly encoded redirect_uri
 app.get("/", (req, res) => {
@@ -15,7 +26,7 @@ app.get("/", (req, res) => {
   `)
 })
 
-// OAuth callback: exchange code for tokens
+// OAuth callback: exchange code for tokens and save to MongoDB
 app.get("/callback", async (req, res) => {
   const code = req.query.code
   if (!code) return res.status(400).send("Missing ?code")
@@ -35,11 +46,31 @@ app.get("/callback", async (req, res) => {
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     )
 
-    console.log("✅ Token exchange success:", response.data)
+    const tokens = response.data
+    console.log("✅ Token exchange success:", tokens)
+
+    // Save tokens to MongoDB
+    const db = await getDb()
+    const tokensCollection = db.collection("tokens")
+
+    await tokensCollection.updateOne(
+      { account_id: tokens.account_id },
+      {
+        $set: {
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+          expires_in: tokens.expires_in,
+          scope: tokens.scope,
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    )
+
     res.send(`
-      <h1>Tokens received!</h1>
-      <pre>${JSON.stringify(response.data, null, 2)}</pre>
-      <p>Check your server logs for details.</p>
+      <h1>Tokens received and saved to DB!</h1>
+      <pre>${JSON.stringify(tokens, null, 2)}</pre>
+      <p>Check your server logs and database.</p>
     `)
   } catch (err) {
     console.error("❌ Token exchange failed:", err.response?.data || err.message)
