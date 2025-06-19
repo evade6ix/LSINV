@@ -2,50 +2,63 @@ import axios from "axios"
 import dotenv from "dotenv"
 dotenv.config()
 
-let accessToken = process.env.ACCESS_TOKEN || null
+let accessToken = null
 
 async function refreshAccessToken() {
   try {
-    const res = await axios.post(
-      "https://cloud.lightspeedapp.com/oauth/access_token.php",
-      new URLSearchParams({
-        refresh_token: process.env.REFRESH_TOKEN,
-        client_id: process.env.CLIENT_ID,
-        client_secret: process.env.CLIENT_SECRET,
-        grant_type: "refresh_token"
-      })
-    )
-    accessToken = res.data.access_token
-    console.log("✅ Refreshed Access Token")
+    const response = await axios.post("https://cloud.lightspeedapp.com/auth/oauth/token", {
+      client_id: process.env.CLIENT_ID,
+      client_secret: process.env.CLIENT_SECRET,
+      refresh_token: process.env.REFRESH_TOKEN,
+      grant_type: "refresh_token"
+    })
+
+    accessToken = response.data.access_token
+    console.log("✅ Access token refreshed")
     return accessToken
   } catch (err) {
-    console.error("❌ Failed to refresh token:", err.response?.data || err.message)
+    console.error("❌ Failed to refresh access token:", err.response?.data || err.message)
     throw err
   }
 }
 
-async function fetchProducts(page = 0, limit = 100) {
+async function fetchAllProducts() {
   if (!accessToken) await refreshAccessToken()
 
-  const offset = page * limit
-  try {
-    const res = await axios.get(
-      `https://api.lightspeedapp.com/API/Account/${process.env.ACCOUNT_ID}/Item.json?limit=${limit}&offset=${offset}&load_relations=["ItemShops"]`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      }
-    )
+  const allProducts = []
+  let url = `https://api.lightspeedapp.com/API/V3/Account/${process.env.ACCOUNT_ID}/Item.json?limit=100&sort=itemID&load_relations=["ItemShops"]`
 
-    return res.data.Item ? (Array.isArray(res.data.Item) ? res.data.Item : [res.data.Item]) : []
-  } catch (err) {
-    if (err.response?.status === 401) {
-      console.warn("🔁 Token expired, refreshing...")
-      await refreshAccessToken()
-      return fetchProducts(page, limit)
-    } else {
-      throw err
+  while (url) {
+    try {
+      const res = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json"
+        }
+      })
+
+      const items = res.data.Item
+      const attributes = res.data["@attributes"]
+
+      if (items) {
+        const productArray = Array.isArray(items) ? items : [items]
+        allProducts.push(...productArray)
+        console.log(`📦 Loaded ${productArray.length} items (${allProducts.length} total so far)`)
+      }
+
+      url = attributes?.next || null
+    } catch (err) {
+      if (err.response?.status === 401) {
+        console.warn("🔁 Token expired, refreshing...")
+        await refreshAccessToken()
+      } else {
+        console.error("❌ Error fetching products:", err.response?.data || err.message)
+        break
+      }
     }
   }
+
+  return allProducts
 }
 
-export { fetchProducts, refreshAccessToken }
+export { fetchAllProducts, refreshAccessToken }
